@@ -1,0 +1,6 @@
+[submodule "01_admin_panel"]
+	path = 01_admin_panel
+	url = git@github.com:8ubble8uddy/movies-admin-panel.git
+[submodule "02_async_api"]
+	path = 02_async_api
+	url = git@github.com:8ubble8uddy/movies-async-api.git

@@ -1,0 +1,163 @@
+x-postgres-etl-env: &postgres-etl-env
+  POSTGRES_HOST: postgres_etl
+  POSTGRES_PORT: 5433
+  POSTGRES_DB: etl_database
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+
+x-postgres-movies-env: &postgres-movies-env
+  POSTGRES_HOST: postgres_movies
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: movies_database
+  POSTGRES_USER: app
+  POSTGRES_PASSWORD: 123qwe
+
+x-redis-env: &redis-env
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+
+x-elastic-env: &elastic-env
+  ELASTIC_HOST: elastic
+  ELASTIC_PORT: 9200
+
+x-django-etl-env: &django-etl-env
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,[::1],etl_panel
+  DJANGO_SECRET_KEY: django-insecure-)%ceik*k#kl+x1tc!_=*n64=88gev=m(j!@c8r-e63q3e^58mo
+
+x-django-admin-env: &django-admin-env
+  DJANGO_SUPERUSER_USERNAME: admin
+  DJANGO_SUPERUSER_EMAIL: admin@mail.ru
+  DJANGO_SUPERUSER_PASSWORD: 1234
+  DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,[::1],admin_panel
+  DJANGO_SECRET_KEY: django-insecure-_o)z83b+i@jfjzbof_jn9#%dw*5q2yy3r6zzq-3azof#(vkf!#
+
+x-fastapi-env: &fastapi-env
+  FASTAPI_DEBUG: True
+
+services:
+  etl_panel:
+    build: ../../backend
+    image: django_etl_panel
+    ports:
+      - 8000:8000
+    entrypoint:
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    environment:
+      PYTHONUNBUFFERED: 1
+      DJANGO_DEBUG: "True"
+      <<: [*postgres-etl-env, *redis-env, *django-etl-env]
+    depends_on:
+      postgres_etl:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery:
+    image: django_etl_panel
+    entrypoint:
+      sh -c "celery -A core worker --beat --loglevel=info"
+    environment: 
+      <<: [*postgres-etl-env, *redis-env]
+    depends_on:
+      postgres_etl:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  flower:
+    image: django_etl_panel
+    ports:
+      - 5555:5555
+    entrypoint:
+      sh -c "celery -A core flower --port=5555"
+    environment: 
+      <<: [*redis-env]
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  admin_panel:
+    image: 8ubble8uddy/django_admin_panel:1.0.0
+    ports:
+      - 8001:8001
+    entrypoint:
+      sh -c "python manage.py migrate --fake movies 0001_initial &&
+             python manage.py migrate &&
+             python manage.py createsuperuser --noinput &&
+             python manage.py runserver 0.0.0.0:8001"
+    environment:
+      PYTHONUNBUFFERED: 1
+      DJANGO_DEBUG: "True"
+      <<: [*postgres-movies-env, *django-admin-env]
+    depends_on:
+      postgres_movies:
+        condition: service_healthy
+
+  async_api:
+    image: 8ubble8uddy/async_api:1.0.0
+    ports:
+      - 8002:8002
+    entrypoint:
+      sh -c "python main.py"
+    environment:
+      FASTAPI_PORT: 8002
+      <<: [*elastic-env, *redis-env, *fastapi-env]
+    depends_on:
+      elastic:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7.0.5
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 5s
+      retries: 100
+
+  postgres_etl:
+    image: postgres:14.5-alpine
+    ports:
+      - 5433:5433
+    volumes:
+      - ../data/etl_database.sql:/docker-entrypoint-initdb.d/etl_database.sql
+    environment:
+      PGPORT: 5433
+      <<: [*postgres-etl-env]
+    healthcheck:
+      test: pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}
+      interval: 5s
+      timeout: 5s
+      retries: 100
+
+  postgres_movies:
+    image: postgres:14.5-alpine
+    ports:
+      - 5432:5432
+    volumes:
+      - ../data/movies_database.sql:/docker-entrypoint-initdb.d/movies_database.sql
+    environment:
+      <<: [*postgres-movies-env]
+    healthcheck:
+      test: pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}
+      interval: 5s
+      timeout: 5s
+      retries: 100
+
+  elastic:
+    image: elasticsearch:7.17.8
+    ports:
+      - 9200:9200
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: false
+      ES_JAVA_OPTS: -Xms1024m -Xmx1024m
+    healthcheck:
+      test: curl -s http://elastic:9200 >/dev/null || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 100

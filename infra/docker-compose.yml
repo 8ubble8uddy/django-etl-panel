@@ -1,0 +1,122 @@
+services:
+  etl_panel:
+    image: 8ubble8uddy/django_etl_panel:1.0.0
+    volumes:
+      - static_value:/opt/django_etl_panel/static/
+      - media_value:/opt/django_etl_panel/media/
+    environment: &etl_env
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      POSTGRES_DB: ${POSTGRES_ETL_DB}
+      POSTGRES_HOST: ${POSTGRES_ETL_HOST}
+      POSTGRES_PORT: ${POSTGRES_ETL_PORT}
+      POSTGRES_USER: ${POSTGRES_ETL_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ETL_PASSWORD}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ETL_ALLOWED_HOSTS}
+      DJANGO_SECRET_KEY: ${DJANGO_ETL_SECRET_KEY}
+
+  celery:
+    image: 8ubble8uddy/django_etl_panel:1.0.0
+    environment: 
+      <<: *etl_env
+    entrypoint:
+      sh -c "celery -A core worker --beat --loglevel=info"
+    depends_on:
+      - etl_panel
+      - postgres_etl
+      - redis
+
+  flower:
+    image: 8ubble8uddy/django_etl_panel:1.0.0
+    expose:
+      - 5555
+    volumes:
+      - celery_static:/usr/local/lib/python3.10/site-packages/flower/static
+    environment: 
+      <<: *etl_env
+    entrypoint:
+      sh -c "celery -A core flower --basic_auth=admin:1234 --port=5555 --url_prefix=/celery"
+
+  admin_panel:
+    image: 8ubble8uddy/django_admin_panel:1.0.0
+    volumes:
+      - static_value:/opt/django_admin_panel/static/
+      - media_value:/opt/django_admin_panel/media/
+    environment:
+      POSTGRES_DB: ${POSTGRES_MOVIES_DB}
+      POSTGRES_HOST: ${POSTGRES_MOVIES_HOST}
+      POSTGRES_PORT: ${POSTGRES_MOVIES_PORT}
+      POSTGRES_USER: ${POSTGRES_MOVIES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_MOVIES_PASSWORD}
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_ADMIN_SUPERUSER_USERNAME}
+      DJANGO_SUPERUSER_EMAIL: ${DJANGO_ADMIN_SUPERUSER_EMAIL}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_ADMIN_SUPERUSER_PASSWORD}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ADMIN_ALLOWED_HOSTS}
+      DJANGO_SECRET_KEY: ${DJANGO_ADMIN_SECRET_KEY}
+
+  async_api:
+    image: 8ubble8uddy/async_api:1.0.0
+    env_file:
+      - ./.env
+    depends_on:
+      - admin_panel
+      - redis
+      - elastic
+
+  redis:
+    image: redis:7.0.5
+    expose:
+      - 6379
+
+  postgres_etl:
+    image: postgres:14.5-alpine
+    expose:
+      - 5432
+    volumes:
+      - ./data/etl_database.sql:/docker-entrypoint-initdb.d/etl_database.sql
+    environment:
+      POSTGRES_DB: ${POSTGRES_ETL_DB}
+      POSTGRES_USER: ${POSTGRES_ETL_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ETL_PASSWORD}
+
+  postgres_movies:
+    image: postgres:14.5-alpine
+    expose:
+      - 5432
+    volumes:
+      - ./data/movies_database.sql:/docker-entrypoint-initdb.d/movies_database.sql
+    environment:
+      POSTGRES_DB: ${POSTGRES_MOVIES_DB}
+      POSTGRES_USER: ${POSTGRES_MOVIES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_MOVIES_PASSWORD}
+
+  elastic:
+    image: elasticsearch:7.17.8
+    expose:
+      - 9200
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: false
+      ES_JAVA_OPTS: -Xms1024m -Xmx1024m
+
+  nginx:
+    image: nginx:1.23.2
+    ports:
+      - 80:80
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./nginx/conf.d/default.conf:/etc/nginx/conf.d/default.conf
+      - static_value:/var/www/static/
+      - media_value:/var/www/media/
+      - celery_static:/var/www/celery/static/
+    depends_on:
+      - flower
+      - admin_panel
+      - etl_panel
+      - async_api
+
+
+volumes:
+  static_value:
+  media_value:
+  celery_static:
